@@ -1,0 +1,217 @@
+name: Build SNES Pad V6
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-snes-pad-v6.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Snes9x EX+ 1.5.81 date de 2024 et utilise une ancienne chaine
+    # Autotools. Ubuntu 22.04 evite les incompatibilites d'ubuntu-latest.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get official Snes9x EX Plus 1.5.81 source
+        run: |
+          git checkout 1dea415 -- v2/snes-pad-v2-assets.zip
+          test -f "$GITHUB_WORKSPACE/v6/snes-pad-v6.patch"
+          mkdir -p /tmp/snes-v2-assets
+          unzip -q "$GITHUB_WORKSPACE/v2/snes-pad-v2-assets.zip" -d /tmp/snes-v2-assets
+          git clone https://github.com/Rakashazi/emu-ex-plus-alpha.git source
+          cd source
+          git checkout 12f8a0c48815e01a06bc94a4496eabfde6f45b52
+          git apply "$GITHUB_WORKSPACE/v6/snes-pad-v6.patch"
+          # ITexQuads est déclaré dans Quads.hh sur cette ancienne version du moteur.
+          sed -i '/#include <imagine\/gui\/View.hh>/a #include <imagine/gfx/Quads.hh>' EmuFramework/include/emuframework/EmuInputView.hh
+          # Boutons très visibles par défaut (92% au lieu de 50%).
+          sed -i 's/constexpr uint8_t defaultAlpha = 255. \* .5;/constexpr uint8_t defaultAlpha = 255. * .92;/' EmuFramework/src/vcontrols/VController.cc
+          # Animation de bascule de la croix plus nette à l'appui.
+          sed -i 's/multiplyRGB(.70f)/multiplyRGB(.48f)/g; s/multiplyRGB(1.28f)/multiplyRGB(1.62f)/g' EmuFramework/src/vcontrols/VControllerDPad.cc
+          cp /tmp/snes-v2-assets/gpOverlay.png Snes9x/res/overlays/gpOverlay.png
+          cp /tmp/snes-v2-assets/snesPadPortrait.png Snes9x/res/android/assets/snesPadPortrait.png
+          cp /tmp/snes-v2-assets/snesPadLandscape.png Snes9x/res/android/assets/snesPadLandscape.png
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends autoconf automake autopoint bash binutils-arm-linux-gnueabi clang cmake file gawk gettext git libtool libtool-bin llvm make nasm pkg-config python3-pil unzip wget
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install custom application logo
+        working-directory: source
+        run: |
+          python3 - <<'PY'
+          from collections import deque
+          from pathlib import Path
+          from PIL import Image, ImageDraw
+
+          assets = Path('/tmp/snes-v2-assets')
+          # Compatible avec l'ancienne version de Pillow fournie par Ubuntu 22.04.
+          RESAMPLE = getattr(Image, 'Resampling', Image)
+
+          def erase_edge_checker(image):
+              """Supprime uniquement le damier relié aux bords, sans toucher au métal."""
+              image = image.convert('RGBA')
+              px = image.load()
+              width, height = image.size
+              seen = bytearray(width * height)
+              queue = deque()
+              def is_checker(x, y):
+                  r, g, b, _ = px[x, y]
+                  return min(r, g, b) >= 218 and max(r, g, b) - min(r, g, b) <= 12
+              def add(x, y):
+                  idx = y * width + x
+                  if not seen[idx] and is_checker(x, y):
+                      seen[idx] = 1
+                      queue.append((x, y))
+              for x in range(width):
+                  add(x, 0)
+                  add(x, height - 1)
+              for y in range(height):
+                  add(0, y)
+                  add(width - 1, y)
+              while queue:
+                  x, y = queue.popleft()
+                  if x: add(x - 1, y)
+                  if x + 1 < width: add(x + 1, y)
+                  if y: add(x, y - 1)
+                  if y + 1 < height: add(x, y + 1)
+              for y in range(height):
+                  for x in range(width):
+                      if seen[y * width + x]:
+                          px[x, y] = (198, 196, 193, 255)
+              return image
+
+          # Portrait conservé stable, avec nettoyage des quelques pixels de damier externes.
+          portrait = Image.open(assets / 'snesPadPortrait.png').convert('RGBA').crop((60, 18, 963, 1537))
+          portrait = erase_edge_checker(portrait)
+          alpha = Image.new('L', portrait.size, 255)
+          ImageDraw.Draw(alpha).rounded_rectangle((26, 30, 877, 831), radius=28, fill=0)
+          portrait.putalpha(alpha)
+          portrait.save(assets / 'snesPadPortrait.png', optimize=True)
+
+          # PAYSAGE : recadrage sur toute la coque, suppression réelle du damier externe,
+          # conservation intégrale du cercle droit et fenêtre de jeu alignée sur son cadre.
+          landscape = Image.open(assets / 'snesPadLandscape.png').convert('RGBA').crop((22, 29, 1822, 823))
+          landscape = erase_edge_checker(landscape)
+          alpha = Image.new('L', landscape.size, 255)
+          ImageDraw.Draw(alpha).rounded_rectangle((285, 3, 1497, 620), radius=24, fill=0)
+          landscape.putalpha(alpha)
+          landscape.save(assets / 'snesPadLandscape.png', optimize=True)
+
+          # Bouton avance rapide violet comme L/R, avec chevrons blancs nets.
+          # Le premier carré de la deuxième ligne de ui.png correspond à Fast-forward.
+          ui_path = Path('Snes9x/res/android/assets/ui.png')
+          ui = Image.open(ui_path).convert('RGBA')
+          draw = ImageDraw.Draw(ui)
+          cell = (0, 64, 64, 128)
+          draw.rounded_rectangle((3, 72, 61, 120), radius=12, fill=(83, 34, 150, 255), outline=(165, 116, 230, 255), width=3)
+          draw.polygon([(18, 84), (18, 108), (31, 96)], fill='white')
+          draw.polygon([(33, 84), (33, 108), (46, 96)], fill='white')
+          ui.save(ui_path, optimize=True)
+
+          # Remplace les images RGB copiées plus tôt par les nouvelles images RGBA.
+          (assets / 'snesPadPortrait.png').replace(Path('Snes9x/res/android/assets/snesPadPortrait.png'))
+          (assets / 'snesPadLandscape.png').replace(Path('Snes9x/res/android/assets/snesPadLandscape.png'))
+
+          logo = Image.open('/tmp/snes-v2-assets/app-logo.png').convert('RGB')
+          icons = Path('Snes9x/res/icons')
+          for path in icons.glob('icon-*.png'):
+              try:
+                  size = int(path.stem.split('-')[1])
+                  logo.resize((size, size), RESAMPLE.LANCZOS).save(path, 'PNG')
+                  print(f'Logo installé : {path}')
+              except Exception as error:
+                  print(f'Logo ignoré pour {path}: {error}')
+                  continue
+          # Les anciens fichiers WebP adaptatifs ne sont pas recompilés ici :
+          # leur encodeur varie suivant Ubuntu et ne doit pas bloquer tout l'APK.
+          for path in icons.glob('adaptive-icon-fg-*.webp'):
+              try:
+                  size = int(path.stem.split('-')[-1])
+                  logo.resize((size, size), RESAMPLE.LANCZOS).save(path, 'WEBP')
+                  print(f'Logo adaptatif installé : {path}')
+              except Exception as error:
+                  print(f'Logo adaptatif ignoré pour {path}: {error}')
+                  continue
+          bg = icons / 'adaptive-icon-bg.webp'
+          if bg.exists():
+              try:
+                  Image.new('RGB', (8, 8), 'black').save(bg, 'WEBP')
+              except Exception as error:
+                  print(f'Fond adaptatif conservé: {error}')
+          print('Installation du logo terminée')
+          PY
+
+      - name: Set up Android NDK r26c
+        working-directory: source
+        run: |
+          mkdir -p imagine-sdk
+          wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
+          unzip -q android-ndk-r26c-linux.zip
+          {
+            echo "ANDROID_NDK_PATH=$PWD/android-ndk-r26c"
+            echo "EMUFRAMEWORK_PATH=$PWD/EmuFramework"
+            echo "IMAGINE_PATH=$PWD/imagine"
+            echo "IMAGINE_SDK_PATH=$PWD/imagine-sdk"
+          } >> "$GITHUB_ENV"
+
+      - name: Build libraries
+        working-directory: source/imagine/bundle/all
+        run: |
+          chmod +x ./makeAll-android.sh
+          ./makeAll-android.sh install
+
+      - name: Build framework
+        working-directory: source
+        run: |
+          set -o pipefail
+          # Limiter le parallelisme evite les erreurs memoire du runner GitHub.
+          make -f "$IMAGINE_PATH/android-release.mk" install V=1 -j2 2>&1 | tee /tmp/imagine-build.log
+          make -f "$EMUFRAMEWORK_PATH/android-release.mk" config -j1 2>&1 | tee /tmp/framework-config.log
+          make -f "$EMUFRAMEWORK_PATH/android-release.mk" install V=1 -j2 2>&1 | tee /tmp/framework-build.log
+
+      - name: Show framework error details
+        if: failure()
+        run: |
+          echo "=== Imagine ==="
+          tail -n 120 /tmp/imagine-build.log 2>/dev/null || true
+          echo "=== EmuFramework configuration ==="
+          tail -n 120 /tmp/framework-config.log 2>/dev/null || true
+          echo "=== EmuFramework compilation ==="
+          tail -n 160 /tmp/framework-build.log 2>/dev/null || true
+
+      - name: Build APK
+        working-directory: source/Snes9x
+        run: |
+          make -f android-release.mk android-apk V=1 -j2
+          cp target/android-release/build/outputs/apk/release/SNESPadV6-release.apk "$GITHUB_WORKSPACE/SNES-Pad-V6.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SNES-Pad-V6
+          path: SNES-Pad-V6.apk
+
+      - name: Publish V6 release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: snes-pad-v6
+          name: SNES Pad V6
+          artifacts: SNES-Pad-V6.apk
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: true
