@@ -1,0 +1,113 @@
+name: Build SNES Pad V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [snes-pad-v2]
+    paths:
+      - "v2/**"
+      - ".github/workflows/build-snes-pad-v2.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get official Snes9x EX Plus 1.5.81 source
+        run: |
+          mkdir -p /tmp/snes-v2-assets
+          unzip -q "$GITHUB_WORKSPACE/v2/snes-pad-v2-assets.zip" -d /tmp/snes-v2-assets
+          git clone https://github.com/Rakashazi/emu-ex-plus-alpha.git source
+          cd source
+          git checkout 12f8a0c48815e01a06bc94a4496eabfde6f45b52
+          git apply "$GITHUB_WORKSPACE/v2/snes-pad-v2.patch"
+          cp /tmp/snes-v2-assets/gpOverlay.png Snes9x/res/overlays/gpOverlay.png
+          cp /tmp/snes-v2-assets/snesPadPortrait.png Snes9x/res/android/assets/snesPadPortrait.png
+          cp /tmp/snes-v2-assets/snesPadLandscape.png Snes9x/res/android/assets/snesPadLandscape.png
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends autoconf automake autopoint bash binutils-arm-linux-gnueabi clang cmake file gawk gettext git libtool libtool-bin llvm make nasm pkg-config python3-pil unzip wget
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install custom application logo
+        working-directory: source
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          logo = Image.open('/tmp/snes-v2-assets/app-logo.png').convert('RGB')
+          icons = Path('Snes9x/res/icons')
+          for path in icons.glob('icon-*.png'):
+              try:
+                  size = int(path.stem.split('-')[1])
+              except (IndexError, ValueError):
+                  continue
+              logo.resize((size, size), Image.Resampling.LANCZOS).save(path)
+          for path in icons.glob('adaptive-icon-fg-*.webp'):
+              try:
+                  size = int(path.stem.split('-')[-1])
+              except (IndexError, ValueError):
+                  continue
+              logo.resize((size, size), Image.Resampling.LANCZOS).save(path, 'WEBP', lossless=True)
+          bg = icons / 'adaptive-icon-bg.webp'
+          if bg.exists():
+              Image.new('RGB', (1, 1), 'black').save(bg, 'WEBP', lossless=True)
+          PY
+
+      - name: Set up Android NDK r26c
+        working-directory: source
+        run: |
+          mkdir -p imagine-sdk
+          wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
+          unzip -q android-ndk-r26c-linux.zip
+          {
+            echo "ANDROID_NDK_PATH=$PWD/android-ndk-r26c"
+            echo "EMUFRAMEWORK_PATH=$PWD/EmuFramework"
+            echo "IMAGINE_PATH=$PWD/imagine"
+            echo "IMAGINE_SDK_PATH=$PWD/imagine-sdk"
+          } >> "$GITHUB_ENV"
+
+      - name: Build libraries
+        working-directory: source/imagine/bundle/all
+        run: |
+          chmod +x ./makeAll-android.sh
+          ./makeAll-android.sh install
+
+      - name: Build framework
+        working-directory: source
+        run: |
+          make -f "$IMAGINE_PATH/android-release.mk" install V=1 -j"$(nproc)"
+          make -f "$EMUFRAMEWORK_PATH/android-release.mk" config -j"$(nproc)"
+          make -f "$EMUFRAMEWORK_PATH/android-release.mk" install V=1 -j"$(nproc)"
+
+      - name: Build APK
+        working-directory: source/Snes9x
+        run: |
+          make -f android-release.mk android-apk V=1 -j"$(nproc)"
+          cp target/android-release/build/outputs/apk/release/SNESPadV2-release.apk "$GITHUB_WORKSPACE/SNES-Pad-V2.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SNES-Pad-V2
+          path: SNES-Pad-V2.apk
+
+      - name: Publish V2 release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: snes-pad-v2
+          name: SNES Pad V2
+          artifacts: SNES-Pad-V2.apk
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: true
