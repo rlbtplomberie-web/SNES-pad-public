@@ -31,6 +31,8 @@ jobs:
           cd source
           git checkout 12f8a0c48815e01a06bc94a4496eabfde6f45b52
           git apply "$GITHUB_WORKSPACE/v5/snes-pad-v5.patch"
+          # ITexQuads est déclaré dans Quads.hh sur cette ancienne version du moteur.
+          sed -i '/#include <imagine\/gui\/View.hh>/a #include <imagine/gfx/Quads.hh>' EmuFramework/include/emuframework/EmuInputView.hh
           # Boutons très visibles par défaut (92% au lieu de 50%).
           sed -i 's/constexpr uint8_t defaultAlpha = 255. \* .5;/constexpr uint8_t defaultAlpha = 255. * .92;/' EmuFramework/src/vcontrols/VController.cc
           # Animation de bascule de la croix plus nette à l'appui.
