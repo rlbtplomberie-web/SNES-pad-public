@@ -24,13 +24,41 @@ jobs:
       - name: Get official Snes9x EX Plus 1.5.81 source
         run: |
           git checkout 1dea415 -- v2/snes-pad-v2-assets.zip
-          test -f "$GITHUB_WORKSPACE/v7/snes-pad-v7.patch"
+          test -f "$GITHUB_WORKSPACE/v6/snes-pad-v6.patch"
           mkdir -p /tmp/snes-v2-assets
           unzip -q "$GITHUB_WORKSPACE/v2/snes-pad-v2-assets.zip" -d /tmp/snes-v2-assets
           git clone https://github.com/Rakashazi/emu-ex-plus-alpha.git source
           cd source
           git checkout 12f8a0c48815e01a06bc94a4496eabfde6f45b52
-          git apply "$GITHUB_WORKSPACE/v7/snes-pad-v7.patch"
+          git apply "$GITHUB_WORKSPACE/v6/snes-pad-v6.patch"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              file = Path(path)
+              text = file.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'Bloc V7 introuvable ou dupliqué dans {path}: {text.count(old)}')
+              file.write_text(text.replace(old, new))
+
+          replace_once('EmuFramework/src/EmuVideoLayer.cc', 'viewRect.x + viewRect.xSize() * 832 / 1000', 'viewRect.x + viewRect.xSize() * 805 / 1000')
+          replace_once('EmuFramework/src/gui/EmuInputView.cc', '\tskinQuad.write(0, {.bounds = window().bounds().as<int16_t>()});', '\tauto skinBounds = window().bounds();\n\tif(window().isLandscape())\n\t{\n\t\tconst int overX = std::max(4, skinBounds.xSize() / 35);\n\t\tconst int overY = std::max(3, skinBounds.ySize() / 28);\n\t\tskinBounds.x -= overX;\n\t\tskinBounds.x2 += overX;\n\t\tskinBounds.y -= overY;\n\t\tskinBounds.y2 += overY;\n\t}\n\tskinQuad.write(0, {.bounds = skinBounds.as<int16_t>()});')
+
+          controls = 'EmuFramework/src/gui/PlaceVControlsView.cc'
+          replace_once(controls, 'exitText{attach.rendererTask, "Exit", &defaultFace()}', 'exitText{attach.rendererTask, "Save & Exit", &defaultFace()}')
+          replace_once(controls, '\t\t\t\t\tif(d.elem)\n\t\t\t\t\t\treturn;\n\t\t\t\t\tif(exitBtnRect.overlaps(state.pos())', '\t\t\t\t\tif(d.elem)\n\t\t\t\t\t{\n\t\t\t\t\t\tapp().saveConfigFile(appContext());\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}\n\t\t\t\t\tif(exitBtnRect.overlaps(state.pos())')
+          replace_once(controls, '\t\t\t\t\t{\n\t\t\t\t\t\tdismiss();\n\t\t\t\t\t}\n\t\t\t\t\telse if(snapBtnRect.overlaps', '\t\t\t\t\t{\n\t\t\t\t\t\tapp().saveConfigFile(appContext());\n\t\t\t\t\t\tdismiss();\n\t\t\t\t\t}\n\t\t\t\t\telse if(snapBtnRect.overlaps')
+
+          video = 'EmuFramework/src/gui/PlaceVideoView.cc'
+          replace_once(video, 'exitText{attach.rendererTask, "Exit", &defaultFace()}', 'exitText{attach.rendererTask, "Save & Exit", &defaultFace()}')
+          replace_once(video, '\t\t\t\t\t\tdragState = {};\n\t\t\t\t\t}', '\t\t\t\t\t\tdragState = {};\n\t\t\t\t\t\tapp().saveConfigFile(appContext());\n\t\t\t\t\t}')
+          replace_once(video, '\t\t\t\t\t\t{\n\t\t\t\t\t\t\tdismiss();\n\t\t\t\t\t\t}\n\t\t\t\t\t\telse if(resetBounds.overlaps', '\t\t\t\t\t\t{\n\t\t\t\t\t\t\tapp().saveConfigFile(appContext());\n\t\t\t\t\t\t\tdismiss();\n\t\t\t\t\t\t}\n\t\t\t\t\t\telse if(resetBounds.overlaps')
+
+          metadata = 'Snes9x/metadata/conf.mk'
+          for old, new in [('SNES Pad V6', 'SNES Pad V7'), ('com.rlbtplomberie.snespadv6', 'com.rlbtplomberie.snespadv7'), ('snespadv6', 'snespadv7'), ('SNESPadV6', 'SNESPadV7')]:
+              replace_once(metadata, old, new)
+          print('Corrections V7 appliquées après la base V6')
+          PY
           # ITexQuads est déclaré dans Quads.hh sur cette ancienne version du moteur.
           sed -i '/#include <imagine\/gui\/View.hh>/a #include <imagine/gfx/Quads.hh>' EmuFramework/include/emuframework/EmuInputView.hh
           # Boutons très visibles par défaut (92% au lieu de 50%).
