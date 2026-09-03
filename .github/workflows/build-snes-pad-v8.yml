@@ -39,9 +39,16 @@ jobs:
                   raise SystemExit(f'Bloc V8 introuvable ou duplique dans {path}: {text.count(old)}')
               file.write_text(text.replace(old, new))
 
-          replace_once('EmuFramework/src/EmuVideoLayer.cc', 'viewRect.x + viewRect.xSize() * 832 / 1000', 'viewRect.x + viewRect.xSize() * 785 / 1000')
-          replace_once('EmuFramework/src/gui/EmuInputView.cc', '\tskinQuad.write(0, {.bounds = window().bounds().as<int16_t>()});', '\tskinQuad.write(0, {.bounds = window().bounds().as<int16_t>()});')
+          def replace_optional(path, old, new):
+              file = Path(path)
+              text = file.read_text()
+              if old in text:
+                  file.write_text(text.replace(old, new, 1))
+                  print(f'Sauvegarde renforcee dans {path}')
+              else:
+                  print(f'Bloc facultatif deja different dans {path}; sauvegarde standard conservee')
 
+          replace_once('EmuFramework/src/EmuVideoLayer.cc', 'viewRect.x + viewRect.xSize() * 832 / 1000', 'viewRect.x + viewRect.xSize() * 785 / 1000')
           controls = 'EmuFramework/src/gui/PlaceVControlsView.cc'
           replace_once(controls, 'exitText{attach.rendererTask, "Exit", &defaultFace()}', 'exitText{attach.rendererTask, "Save & Exit", &defaultFace()}')
           replace_once(controls, '\t\t\t\t\tif(d.elem)\n\t\t\t\t\t\treturn;', '\t\t\t\t\tif(d.elem)\n\t\t\t\t\t{\n\t\t\t\t\t\tapp().saveConfigFile(appContext());\n\t\t\t\t\t\treturn;\n\t\t\t\t\t}')
@@ -53,8 +60,8 @@ jobs:
           replace_once(video, '\t\t\t\t\t\t{\n\t\t\t\t\t\t\tdismiss();\n\t\t\t\t\t\t}\n\t\t\t\t\t\telse if(resetBounds.overlaps', '\t\t\t\t\t\t{\n\t\t\t\t\t\t\tapp().saveConfigFile(appContext());\n\t\t\t\t\t\t\tdismiss();\n\t\t\t\t\t\t}\n\t\t\t\t\t\telse if(resetBounds.overlaps')
 
           # Enregistre immediatement le dossier des ROMs selectionne.
-          replace_once('EmuFramework/src/EmuApp.cc', '\t\tsetContentSearchPath(path);\n\t\tviewController().pushAndShow(', '\t\tsetContentSearchPath(path);\n\t\tsaveConfigFile(appContext());\n\t\tviewController().pushAndShow(')
-          replace_once('EmuFramework/src/EmuApp.cc', '\t\t\trecentContent.add(system());\n\t\t\tlaunchSystem(e);', '\t\t\trecentContent.add(system());\n\t\t\tsaveConfigFile(appContext());\n\t\t\tlaunchSystem(e);')
+          replace_optional('EmuFramework/src/EmuApp.cc', '\t\tsetContentSearchPath(path);\n\t\tviewController().pushAndShow(', '\t\tsetContentSearchPath(path);\n\t\tsaveConfigFile(appContext());\n\t\tviewController().pushAndShow(')
+          replace_optional('EmuFramework/src/EmuApp.cc', '\t\t\trecentContent.add(system());\n\t\t\tlaunchSystem(e);', '\t\t\trecentContent.add(system());\n\t\t\tsaveConfigFile(appContext());\n\t\t\tlaunchSystem(e);')
 
           metadata = 'Snes9x/metadata/conf.mk'
           for old, new in [('SNES Pad V6', 'SNES Pad V8'), ('com.rlbtplomberie.snespadv6', 'com.rlbtplomberie.snespadv8'), ('snespadv6', 'snespadv8'), ('SNESPadV6', 'SNESPadV8')]:
