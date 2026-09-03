@@ -1,0 +1,166 @@
+name: Build SNES Pad V3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-snes-pad-v3.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Snes9x EX+ 1.5.81 date de 2024 et utilise une ancienne chaine
+    # Autotools. Ubuntu 22.04 evite les incompatibilites d'ubuntu-latest.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: snes-pad-v2
+
+      - name: Get official Snes9x EX Plus 1.5.81 source
+        run: |
+          mkdir -p /tmp/snes-v2-assets
+          unzip -q "$GITHUB_WORKSPACE/v2/snes-pad-v2-assets.zip" -d /tmp/snes-v2-assets
+          git clone https://github.com/Rakashazi/emu-ex-plus-alpha.git source
+          cd source
+          git checkout 12f8a0c48815e01a06bc94a4496eabfde6f45b52
+          git apply "$GITHUB_WORKSPACE/v2/snes-pad-v2.patch"
+          # Le patch V2 utilise ITexQuads : inclure sa définition avant compilation.
+          sed -i '/#include <imagine\/gui\/View.hh>/a #include <imagine/gfx/Quads.hh>' EmuFramework/include/emuframework/EmuInputView.hh
+          # Le skin doit couvrir toute la vue, y compris la zone de la caméra.
+          sed -i 's/displayRect().as<int16_t>()/viewRect().as<int16_t>()/' EmuFramework/src/gui/EmuInputView.cc
+          # Boutons très visibles par défaut (92% au lieu de 50%).
+          sed -i 's/constexpr uint8_t defaultAlpha = 255. \* .5;/constexpr uint8_t defaultAlpha = 255. * .92;/' EmuFramework/src/vcontrols/VController.cc
+          # Animation de bascule de la croix plus nette à l'appui.
+          sed -i 's/multiplyRGB(.70f)/multiplyRGB(.48f)/g; s/multiplyRGB(1.28f)/multiplyRGB(1.62f)/g' EmuFramework/src/vcontrols/VControllerDPad.cc
+          # Nom affiché de la nouvelle version, même application pour conserver les réglages.
+          sed -i 's/metadata_name = SNES Pad V2/metadata_name = SNES Pad V3/' Snes9x/metadata/conf.mk
+          cp /tmp/snes-v2-assets/gpOverlay.png Snes9x/res/overlays/gpOverlay.png
+          cp /tmp/snes-v2-assets/snesPadPortrait.png Snes9x/res/android/assets/snesPadPortrait.png
+          cp /tmp/snes-v2-assets/snesPadLandscape.png Snes9x/res/android/assets/snesPadLandscape.png
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends autoconf automake autopoint bash binutils-arm-linux-gnueabi clang cmake file gawk gettext git libtool libtool-bin llvm make nasm pkg-config python3-pil unzip wget
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install custom application logo
+        working-directory: source
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from PIL import Image, ImageDraw
+
+          assets = Path('/tmp/snes-v2-assets')
+
+          def prepare(name, crop, hole, radius):
+              image = Image.open(assets / name).convert('RGBA').crop(crop)
+              alpha = Image.new('L', image.size, 255)
+              ImageDraw.Draw(alpha).rounded_rectangle(hole, radius=radius, fill=0)
+              image.putalpha(alpha)
+              image.save(assets / name, optimize=True)
+
+          # Vraies fenêtres transparentes et coques recadrées plein écran.
+          prepare('snesPadPortrait.png',  (60, 18, 963, 1537), (26, 30, 877, 831), 28)
+          prepare('snesPadLandscape.png', (22, 29, 1821, 823), (307, 32, 1519, 614), 24)
+
+          # Remplace les images RGB copiées plus tôt par les nouvelles images RGBA.
+          (assets / 'snesPadPortrait.png').replace(Path('Snes9x/res/android/assets/snesPadPortrait.png'))
+          (assets / 'snesPadLandscape.png').replace(Path('Snes9x/res/android/assets/snesPadLandscape.png'))
+
+          logo = Image.open('/tmp/snes-v2-assets/app-logo.png').convert('RGB')
+          icons = Path('Snes9x/res/icons')
+          for path in icons.glob('icon-*.png'):
+              try:
+                  size = int(path.stem.split('-')[1])
+                  logo.resize((size, size), Image.Resampling.LANCZOS).save(path, 'PNG')
+                  print(f'Logo installé : {path}')
+              except Exception as error:
+                  print(f'Logo ignoré pour {path}: {error}')
+                  continue
+          # Les anciens fichiers WebP adaptatifs ne sont pas recompilés ici :
+          # leur encodeur varie suivant Ubuntu et ne doit pas bloquer tout l'APK.
+          for path in icons.glob('adaptive-icon-fg-*.webp'):
+              try:
+                  size = int(path.stem.split('-')[-1])
+                  logo.resize((size, size), Image.Resampling.LANCZOS).save(path, 'WEBP')
+                  print(f'Logo adaptatif installé : {path}')
+              except Exception as error:
+                  print(f'Logo adaptatif ignoré pour {path}: {error}')
+                  continue
+          bg = icons / 'adaptive-icon-bg.webp'
+          if bg.exists():
+              try:
+                  Image.new('RGB', (8, 8), 'black').save(bg, 'WEBP')
+              except Exception as error:
+                  print(f'Fond adaptatif conservé: {error}')
+          print('Installation du logo terminée')
+          PY
+
+      - name: Set up Android NDK r26c
+        working-directory: source
+        run: |
+          mkdir -p imagine-sdk
+          wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
+          unzip -q android-ndk-r26c-linux.zip
+          {
+            echo "ANDROID_NDK_PATH=$PWD/android-ndk-r26c"
+            echo "EMUFRAMEWORK_PATH=$PWD/EmuFramework"
+            echo "IMAGINE_PATH=$PWD/imagine"
+            echo "IMAGINE_SDK_PATH=$PWD/imagine-sdk"
+          } >> "$GITHUB_ENV"
+
+      - name: Build libraries
+        working-directory: source/imagine/bundle/all
+        run: |
+          chmod +x ./makeAll-android.sh
+          ./makeAll-android.sh install
+
+      - name: Build framework
+        working-directory: source
+        run: |
+          set -o pipefail
+          # Limiter le parallelisme evite les erreurs memoire du runner GitHub.
+          make -f "$IMAGINE_PATH/android-release.mk" install V=1 -j2 2>&1 | tee /tmp/imagine-build.log
+          make -f "$EMUFRAMEWORK_PATH/android-release.mk" config -j1 2>&1 | tee /tmp/framework-config.log
+          make -f "$EMUFRAMEWORK_PATH/android-release.mk" install V=1 -j2 2>&1 | tee /tmp/framework-build.log
+
+      - name: Show framework error details
+        if: failure()
+        run: |
+          echo "=== Imagine ==="
+          tail -n 120 /tmp/imagine-build.log 2>/dev/null || true
+          echo "=== EmuFramework configuration ==="
+          tail -n 120 /tmp/framework-config.log 2>/dev/null || true
+          echo "=== EmuFramework compilation ==="
+          tail -n 160 /tmp/framework-build.log 2>/dev/null || true
+
+      - name: Build APK
+        working-directory: source/Snes9x
+        run: |
+          make -f android-release.mk android-apk V=1 -j2
+          cp target/android-release/build/outputs/apk/release/SNESPadV2-release.apk "$GITHUB_WORKSPACE/SNES-Pad-V3.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SNES-Pad-V3
+          path: SNES-Pad-V3.apk
+
+      - name: Publish V2 release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: snes-pad-v3
+          name: SNES Pad V3
+          artifacts: SNES-Pad-V3.apk
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: true
