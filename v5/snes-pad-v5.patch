@@ -1,0 +1,578 @@
+diff --git a/EmuFramework/include/emuframework/EmuApp.hh b/EmuFramework/include/emuframework/EmuApp.hh
+index 85af35d2e..69360982e 100644
+--- a/EmuFramework/include/emuframework/EmuApp.hh
++++ b/EmuFramework/include/emuframework/EmuApp.hh
+@@ -66,7 +66,9 @@ class EmuViewController;
+ WISE_ENUM_CLASS((AssetFileID, size_t),
+ 	ui,
+ 	gamepadOverlay,
+-	keyboardOverlay);
++	keyboardOverlay,
++	portraitSkin,
++	landscapeSkin);
+ 
+ WISE_ENUM_CLASS((AssetID, size_t),
+ 	arrow,
+@@ -86,13 +88,17 @@ WISE_ENUM_CLASS((AssetID, size_t),
+ 	openFile,
+ 	rewind,
+ 	gamepadOverlay,
+-	keyboardOverlay);
++	keyboardOverlay,
++	portraitSkin,
++	landscapeSkin);
+ 
+ constexpr const char *assetFilename[wise_enum::size<AssetFileID>]
+ {
+ 	"ui.png",
+ 	"gpOverlay.png",
+ 	"kbOverlay.png",
++	"snesPadPortrait.png",
++	"snesPadLandscape.png",
+ };
+ 
+ struct AssetDesc
+diff --git a/EmuFramework/include/emuframework/EmuInputView.hh b/EmuFramework/include/emuframework/EmuInputView.hh
+index fd3348b65..b5a4266b5 100644
+--- a/EmuFramework/include/emuframework/EmuInputView.hh
++++ b/EmuFramework/include/emuframework/EmuInputView.hh
+@@ -46,6 +46,9 @@ public:
+ private:
+ 	VController *vController{};
+ 	EmuVideoLayer *videoLayer{};
++	Gfx::ITexQuads skinQuad;
++	Gfx::TextureSpan portraitSkin;
++	Gfx::TextureSpan landscapeSkin;
+ 	bool speedToggleActive{};
+ 
+ 	void updateRunSpeed(AltSpeedMode);
+diff --git a/EmuFramework/include/emuframework/EmuOptions.hh b/EmuFramework/include/emuframework/EmuOptions.hh
+index 1e214c045..8a181ce85 100644
+--- a/EmuFramework/include/emuframework/EmuOptions.hh
++++ b/EmuFramework/include/emuframework/EmuOptions.hh
+@@ -84,6 +84,10 @@ enum { CFGKEY_SOUND = 0, CFGKEY_TOUCH_CONTROL_DISPLAY = 1,
+ 	CFGKEY_RECENT_CONTENT_V2 = 116, CFGKEY_MAX_RECENT_CONTENT = 117,
+ 	CFGKEY_REWIND_STATES = 118, CFGKEY_REWIND_TIMER_SECS = 119,
+ 	CFGKEY_FRAME_CLOCK = 120,
++	CFGKEY_VIDEO_LANDSCAPE_X = 121, CFGKEY_VIDEO_LANDSCAPE_Y = 122,
++	CFGKEY_VIDEO_LANDSCAPE_W = 123, CFGKEY_VIDEO_LANDSCAPE_H = 124,
++	CFGKEY_VIDEO_PORTRAIT_X = 125, CFGKEY_VIDEO_PORTRAIT_Y = 126,
++	CFGKEY_VIDEO_PORTRAIT_W = 127, CFGKEY_VIDEO_PORTRAIT_H = 128,
+ 	// 256+ is reserved
+ };
+ 
+diff --git a/EmuFramework/include/emuframework/EmuVideoLayer.hh b/EmuFramework/include/emuframework/EmuVideoLayer.hh
+index eb20e42a0..b9f6ab04d 100644
+--- a/EmuFramework/include/emuframework/EmuVideoLayer.hh
++++ b/EmuFramework/include/emuframework/EmuVideoLayer.hh
+@@ -21,6 +21,7 @@
+ #include <imagine/gfx/Vec3.hh>
+ #include <imagine/pixmap/PixelFormat.hh>
+ #include <imagine/util/container/ArrayList.hh>
++#include <array>
+ 
+ namespace EmuEx
+ {
+@@ -77,6 +78,8 @@ public:
+ 	float portraitAspectRatio;
+ 	int16_t landscapeOffset{};
+ 	int16_t portraitOffset{};
++	std::array<int16_t, 4> landscapeRect{};
++	std::array<int16_t, 4> portraitRect{};
+ private:
+ 	ImageEffectId userEffectId{};
+ 	ImageOverlayId userOverlayEffectId{};
+diff --git a/EmuFramework/include/emuframework/TouchConfigView.hh b/EmuFramework/include/emuframework/TouchConfigView.hh
+index 0ae04dcd8..1a2242107 100644
+--- a/EmuFramework/include/emuframework/TouchConfigView.hh
++++ b/EmuFramework/include/emuframework/TouchConfigView.hh
+@@ -47,6 +47,8 @@ protected:
+ 	MultiChoiceMenuItem player;
+ 	TextMenuItem sizeItem[11];
+ 	MultiChoiceMenuItem size;
++	TextMenuItem gameScreenSizeItem[9];
++	MultiChoiceMenuItem gameScreenSize;
+ 	BoolMenuItem vibrate;
+ 	BoolMenuItem showOnTouch;
+ 	BoolMenuItem highlightPushedButtons;
+diff --git a/EmuFramework/include/emuframework/VController.hh b/EmuFramework/include/emuframework/VController.hh
+index 2ab4fe73b..e740f9aa3 100755
+--- a/EmuFramework/include/emuframework/VController.hh
++++ b/EmuFramework/include/emuframework/VController.hh
+@@ -211,7 +211,15 @@ public:
+ 
+ 	void updateSprite(auto &quads)
+ 	{
+-		Gfx::ILitTexQuad({.bounds = bounds_.as<int16_t>(), .color = spriteColor, .textureSpan = texture}).write(quads, spriteIdx);
++		auto drawBounds = bounds_;
++		if(isHighlighted)
++		{
++			const int inset = std::max(1, drawBounds.xSize() / 18);
++			drawBounds.x += inset;
++			drawBounds.x2 -= inset;
++			drawBounds.y += inset * 2;
++		}
++		Gfx::ILitTexQuad({.bounds = drawBounds.as<int16_t>(), .color = spriteColor, .textureSpan = texture}).write(quads, spriteIdx);
+ 	}
+ 
+ 	void updateSprite(auto &quads, auto &boundQuads)
+@@ -384,6 +392,7 @@ public:
+ 	using VControllerElementVariant::VControllerElementVariant;
+ 
+ 	std::array<VControllerLayoutPosition, 2> layoutPos;
++	std::array<uint16_t, 2> sizePercent{100, 100};
+ 	VControllerState state{VControllerState::SHOWN};
+ 
+ 	constexpr auto dPad() { return std::get_if<VControllerDPad>(this); }
+@@ -396,6 +405,7 @@ public:
+ 	size_t configSize() const
+ 	{
+ 		return (sizeof(VControllerLayoutPosition::pos) + sizeof(_2DOrigin::PackedType)) * 2
++			+ sizeof(sizePercent)
+ 			+ sizeof(state)
+ 			+ visit([](auto &e){ return e.configSize(); }, *this);
+ 	}
+@@ -667,8 +677,8 @@ private:
+ 	VControllerGamepadFlags gamepadDisabledFlags{};
+ 	bool kbMode{};
+ 	uint8_t alpha{};
+-	ConditionalMember<Config::DISPLAY_CUTOUT, bool> allowButtonsPastContentBounds_{};
+-	ConditionalMember<Config::BASE_SUPPORTS_VIBRATOR, bool> vibrateOnTouchInput_{};
++	ConditionalMember<Config::DISPLAY_CUTOUT, bool> allowButtonsPastContentBounds_{true};
++	ConditionalMember<Config::BASE_SUPPORTS_VIBRATOR, bool> vibrateOnTouchInput_{true};
+ public:
+ 	bool highlightPushedButtons{true};
+ 
+diff --git a/EmuFramework/src/ConfigFile.cc b/EmuFramework/src/ConfigFile.cc
+index db464b522..78a96c4ed 100644
+--- a/EmuFramework/src/ConfigFile.cc
++++ b/EmuFramework/src/ConfigFile.cc
+@@ -101,6 +101,14 @@ void EmuApp::saveConfigFile(FileIO &io)
+ 	writeOptionValueIfNotDefault(io, CFGKEY_VIDEO_PORTRAIT_ASPECT_RATIO, videoLayer.portraitAspectRatio, defaultVideoAspectRatio());
+ 	writeOptionValueIfNotDefault(io, CFGKEY_VIDEO_LANDSCAPE_OFFSET, videoLayer.landscapeOffset, 0);
+ 	writeOptionValueIfNotDefault(io, CFGKEY_VIDEO_PORTRAIT_OFFSET, videoLayer.portraitOffset, 0);
++	writeOptionValueIfNotDefault(io, CFGKEY_VIDEO_LANDSCAPE_X, videoLayer.landscapeRect[0], int16_t{});
++	writeOptionValueIfNotDefault(io, CFGKEY_VIDEO_LANDSCAPE_Y, videoLayer.landscapeRect[1], int16_t{});
++	writeOptionValueIfNotDefault(io, CFGKEY_VIDEO_LANDSCAPE_W, videoLayer.landscapeRect[2], int16_t{});
++	writeOptionValueIfNotDefault(io, CFGKEY_VIDEO_LANDSCAPE_H, videoLayer.landscapeRect[3], int16_t{});
++	writeOptionValueIfNotDefault(io, CFGKEY_VIDEO_PORTRAIT_X, videoLayer.portraitRect[0], int16_t{});
++	writeOptionValueIfNotDefault(io, CFGKEY_VIDEO_PORTRAIT_Y, videoLayer.portraitRect[1], int16_t{});
++	writeOptionValueIfNotDefault(io, CFGKEY_VIDEO_PORTRAIT_W, videoLayer.portraitRect[2], int16_t{});
++	writeOptionValueIfNotDefault(io, CFGKEY_VIDEO_PORTRAIT_H, videoLayer.portraitRect[3], int16_t{});
+ 	writeOptionValueIfNotDefault(io, fastModeSpeed);
+ 	writeOptionValueIfNotDefault(io, slowModeSpeed);
+ 	writeOptionValueIfNotDefault(io, CFGKEY_FRAME_RATE, outputTimingManager.frameTimeOption(VideoSystem::NATIVE_NTSC), OutputTimingManager::autoOption);
+@@ -257,6 +265,14 @@ EmuApp::ConfigParams EmuApp::loadConfigFile(IG::ApplicationContext ctx)
+ 				case CFGKEY_VIDEO_PORTRAIT_ASPECT_RATIO: return readOptionValue(io, videoLayer.portraitAspectRatio, isValidAspectRatio);
+ 				case CFGKEY_VIDEO_LANDSCAPE_OFFSET: return readOptionValue(io, videoLayer.landscapeOffset, [](auto v){return v >= -4096 && v <= 4096;});
+ 				case CFGKEY_VIDEO_PORTRAIT_OFFSET: return readOptionValue(io, videoLayer.portraitOffset, [](auto v){return v >= -4096 && v <= 4096;});
++				case CFGKEY_VIDEO_LANDSCAPE_X: return readOptionValue(io, videoLayer.landscapeRect[0]);
++				case CFGKEY_VIDEO_LANDSCAPE_Y: return readOptionValue(io, videoLayer.landscapeRect[1]);
++				case CFGKEY_VIDEO_LANDSCAPE_W: return readOptionValue(io, videoLayer.landscapeRect[2]);
++				case CFGKEY_VIDEO_LANDSCAPE_H: return readOptionValue(io, videoLayer.landscapeRect[3]);
++				case CFGKEY_VIDEO_PORTRAIT_X: return readOptionValue(io, videoLayer.portraitRect[0]);
++				case CFGKEY_VIDEO_PORTRAIT_Y: return readOptionValue(io, videoLayer.portraitRect[1]);
++				case CFGKEY_VIDEO_PORTRAIT_W: return readOptionValue(io, videoLayer.portraitRect[2]);
++				case CFGKEY_VIDEO_PORTRAIT_H: return readOptionValue(io, videoLayer.portraitRect[3]);
+ 				case CFGKEY_VIDEO_BRIGHTNESS: return readOptionValue(io, videoBrightnessRGB);
+ 				case CFGKEY_INPUT_KEY_CONFIGS_V2: return inputManager.readCustomKeyConfig(io);
+ 				case CFGKEY_INPUT_DEVICE_CONFIGS: return inputManager.readSavedInputDevices(io);
+diff --git a/EmuFramework/src/EmuApp.cc b/EmuFramework/src/EmuApp.cc
+index 1774a3a5e..c9f13b69d 100644
+--- a/EmuFramework/src/EmuApp.cc
++++ b/EmuFramework/src/EmuApp.cc
+@@ -87,6 +87,8 @@ constexpr AssetDesc assetDesc[wise_enum::size<AssetID>]
+ 	{AssetFileID::ui, {{.75, .75}, {1.,  1.}}},
+ 	{AssetFileID::gamepadOverlay, {{}, {1.f, 1.f}}},
+ 	{AssetFileID::keyboardOverlay, {{}, {1.f, 1.f}}},
++	{AssetFileID::portraitSkin, {{}, {1.f, 1.f}}},
++	{AssetFileID::landscapeSkin, {{}, {1.f, 1.f}}},
+ };
+ 
+ EmuApp::EmuApp(ApplicationInitParams initParams, ApplicationContext &ctx):
+diff --git a/EmuFramework/src/EmuVideoLayer.cc b/EmuFramework/src/EmuVideoLayer.cc
+index 8795aacf2..f898eff33 100644
+--- a/EmuFramework/src/EmuVideoLayer.cc
++++ b/EmuFramework/src/EmuVideoLayer.cc
+@@ -140,6 +140,12 @@ void EmuVideoLayer::place(IG::WindowRect viewRect, IG::WindowRect displayRect, E
+ 			contentRect_.setPos(displayRect.center() + WPt{landscapeOffset, 0}, C2DO);
+ 		}
+ 		contentRect_.fitIn(displayRect);
++		auto &custom = viewportAspectRatio < 1.f ? portraitRect : landscapeRect;
++		if(custom[2] > 40 && custom[3] > 40)
++		{
++			contentRect_ = {{custom[0], custom[1]}, {custom[0] + custom[2], custom[1] + custom[3]}};
++			contentRect_.fitIn(viewRect);
++		}
+ 		quad.write(0, {.bounds = contentRect_.as<int16_t>(), .textureSpan = texture, .rotation = rotation});
+ 		//log.info("placed game rect at pixels {}:{}:{}:{}", contentRect_.x, contentRect_.y, contentRect_.x2, contentRect_.y2);
+ 	}
+diff --git a/EmuFramework/src/gui/EmuInputView.cc b/EmuFramework/src/gui/EmuInputView.cc
+index 528a567d9..cd6ef1296 100644
+--- a/EmuFramework/src/gui/EmuInputView.cc
++++ b/EmuFramework/src/gui/EmuInputView.cc
+@@ -34,15 +34,22 @@ EmuInputView::EmuInputView() {}
+ EmuInputView::EmuInputView(ViewAttachParams attach, VController &vCtrl, EmuVideoLayer &videoLayer):
+ 	View(attach),
+ 	vController{&vCtrl},
+-	videoLayer{&videoLayer} {}
++	videoLayer{&videoLayer},
++	skinQuad{attach.rendererTask, {.size = 1}},
++	portraitSkin{app().asset(AssetID::portraitSkin)},
++	landscapeSkin{app().asset(AssetID::landscapeSkin)} {}
+ 
+ void EmuInputView::draw(Gfx::RendererCommands &__restrict__ cmds)
+ {
++	auto skin = window().isPortrait() ? portraitSkin : landscapeSkin;
++	cmds.set(Gfx::BlendMode::PREMULT_ALPHA);
++	cmds.basicEffect().drawSprite(cmds, skinQuad, 0, skin);
+ 	vController->draw(cmds);
+ }
+ 
+ void EmuInputView::place()
+ {
++	skinQuad.write(0, {.bounds = window().bounds().as<int16_t>()});
+ 	vController->place();
+ }
+ 
+diff --git a/EmuFramework/src/gui/PlaceVControlsView.cc b/EmuFramework/src/gui/PlaceVControlsView.cc
+index c4cb02daa..c84f2af57 100644
+--- a/EmuFramework/src/gui/PlaceVControlsView.cc
++++ b/EmuFramework/src/gui/PlaceVControlsView.cc
+@@ -114,6 +114,10 @@ bool PlaceVControlsView::inputEvent(const Input::Event &e)
+ 						}
+ 						d.elem = &elem;
+ 						d.startPos = elem.bounds().pos(C2DO);
++						d.startSizePercent = elem.sizePercent[layoutIdx];
++						auto b = elem.bounds();
++						const int grip = std::max(28, std::min(b.xSize(), b.ySize()) / 3);
++						d.resizing = e.pos().x >= b.x2 - grip && e.pos().y >= b.y2 - grip;
+ 						return true;
+ 					};
+ 					for(auto &elem : vController.deviceElements())
+@@ -131,6 +135,15 @@ bool PlaceVControlsView::inputEvent(const Input::Event &e)
+ 				{
+ 					if(d.elem)
+ 					{
++						if(d.resizing)
++						{
++							auto diff = state.downPosDiff();
++							d.elem->sizePercent[layoutIdx] = std::clamp(d.startSizePercent + (diff.x + diff.y) / 3, 45, 220);
++							vController.applyButtonSize();
++							app().viewController().placeEmuViews();
++							postDraw();
++							return;
++						}
+ 						auto newPos = d.startPos + state.downPosDiff();
+ 						if(snapPxIdx)
+ 						{
+@@ -176,11 +189,11 @@ bool PlaceVControlsView::inputEvent(const Input::Event &e)
+ void PlaceVControlsView::draw(Gfx::RendererCommands &__restrict__ cmds)
+ {
+ 	using namespace IG::Gfx;
++	app().viewController().inputView.draw(cmds);
+ 	cmds.setColor({.5, .5, .5});
+ 	auto &basicEffect = cmds.basicEffect();
+ 	basicEffect.disableTexture(cmds);
+ 	cmds.drawQuads<uint16_t>(quads, 2, quads.size() - 2); // grid
+-	vController.draw(cmds, true);
+ 	cmds.setColor({0, 0, 0, .5});
+ 	basicEffect.disableTexture(cmds);
+ 	cmds.drawQuads<uint16_t>(quads, 0, 2); // button bg
+diff --git a/EmuFramework/src/gui/PlaceVControlsView.hh b/EmuFramework/src/gui/PlaceVControlsView.hh
+index 541e67a0f..44ce94281 100644
+--- a/EmuFramework/src/gui/PlaceVControlsView.hh
++++ b/EmuFramework/src/gui/PlaceVControlsView.hh
+@@ -44,6 +44,8 @@ private:
+ 	{
+ 		VControllerElement *elem{};
+ 		WPt startPos{};
++		int startSizePercent{100};
++		bool resizing{};
+ 	};
+ 	Gfx::Text exitText;
+ 	Gfx::Text snapText;
+diff --git a/EmuFramework/src/gui/PlaceVideoView.cc b/EmuFramework/src/gui/PlaceVideoView.cc
+index e001df3f3..e0f5e8a4e 100644
+--- a/EmuFramework/src/gui/PlaceVideoView.cc
++++ b/EmuFramework/src/gui/PlaceVideoView.cc
+@@ -91,6 +91,7 @@ bool PlaceVideoView::inputEvent(const Input::Event &e)
+ 			}
+ 			else if(e.pushed(Input::DefaultKey::CONFIRM))
+ 			{
++				(viewRect().isLandscape() ? layer.landscapeRect : layer.portraitRect) = {};
+ 				updateVideo(0); // reset to default
+ 				return true;
+ 			}
+@@ -107,12 +108,18 @@ bool PlaceVideoView::inputEvent(const Input::Event &e)
+ 			switch(e.state())
+ 			{
+ 				case Input::Action::PUSHED:
+-				{
+-					if(!dragState.isTracking() && !exitBounds.overlaps(e.pos()) && !resetBounds.overlaps(e.pos()))
+ 					{
+-						dragState.start(id, e.pos());
+-						startPosOffset = viewRect().isLandscape() ? layer.landscapeOffset : layer.portraitOffset;
+-					}
++						if(!dragState.isTracking() && !exitBounds.overlaps(e.pos()) && !resetBounds.overlaps(e.pos()))
++						{
++							dragState.start(id, e.pos());
++							startRect = layer.contentRect();
++							const int grip = std::max(36, std::min(startRect.xSize(), startRect.ySize()) / 9);
++							resizeEdges = 0;
++							if(std::abs(e.pos().x - startRect.x) <= grip) resizeEdges |= 1;
++							if(std::abs(e.pos().x - startRect.x2) <= grip) resizeEdges |= 2;
++							if(std::abs(e.pos().y - startRect.y) <= grip) resizeEdges |= 4;
++							if(std::abs(e.pos().y - startRect.y2) <= grip) resizeEdges |= 8;
++						}
+ 					break;
+ 				}
+ 				case Input::Action::MOVED:
+@@ -120,8 +127,22 @@ bool PlaceVideoView::inputEvent(const Input::Event &e)
+ 					if(dragState.isTracking(id))
+ 					{
+ 						dragState.update(e.pos(), 0);
+-						updateVideo(viewRect().isLandscape() ? startPosOffset + dragState.downPosDiff().x
+-							: startPosOffset + dragState.downPosDiff().y);
++						auto d = dragState.downPosDiff();
++						auto r = startRect;
++						if(!resizeEdges) { r.x += d.x; r.x2 += d.x; r.y += d.y; r.y2 += d.y; }
++						else
++						{
++							if(resizeEdges & 1) r.x += d.x;
++							if(resizeEdges & 2) r.x2 += d.x;
++							if(resizeEdges & 4) r.y += d.y;
++							if(resizeEdges & 8) r.y2 += d.y;
++						}
++						if(r.xSize() < 80 || r.ySize() < 80) break;
++						r.fitIn(viewRect());
++						auto &custom = viewRect().isLandscape() ? layer.landscapeRect : layer.portraitRect;
++						custom = {int16_t(r.x), int16_t(r.y), int16_t(r.xSize()), int16_t(r.ySize())};
++						app().viewController().placeEmuViews();
++						app().viewController().postDrawToEmuWindows();
+ 					}
+ 					break;
+ 				}
+@@ -140,6 +161,7 @@ bool PlaceVideoView::inputEvent(const Input::Event &e)
+ 						}
+ 						else if(resetBounds.overlaps(e.pos()))
+ 						{
++							(viewRect().isLandscape() ? layer.landscapeRect : layer.portraitRect) = {};
+ 							updateVideo(0);
+ 						}
+ 					}
+@@ -156,7 +178,7 @@ bool PlaceVideoView::inputEvent(const Input::Event &e)
+ void PlaceVideoView::draw(Gfx::RendererCommands &__restrict__ cmds)
+ {
+ 	using namespace IG::Gfx;
+-	vController.draw(cmds, true);
++	app().viewController().inputView.draw(cmds);
+ 	cmds.setColor({.5, .5, .5});
+ 	auto &basicEffect = cmds.basicEffect();
+ 	basicEffect.disableTexture(cmds);
+diff --git a/EmuFramework/src/gui/PlaceVideoView.hh b/EmuFramework/src/gui/PlaceVideoView.hh
+index 0217374ac..6a9dead60 100644
+--- a/EmuFramework/src/gui/PlaceVideoView.hh
++++ b/EmuFramework/src/gui/PlaceVideoView.hh
+@@ -48,6 +48,8 @@ private:
+ 	Input::DragTrackerState dragState;
+ 	int startPosOffset{};
+ 	int posOffsetLimit{};
++	WRect startRect{};
++	uint8_t resizeEdges{};
+ 
+ 	void updateVideo(int offset);
+ };
+diff --git a/EmuFramework/src/gui/TouchConfigView.cc b/EmuFramework/src/gui/TouchConfigView.cc
+index e5a9b078c..d0c2330e6 100644
+--- a/EmuFramework/src/gui/TouchConfigView.cc
++++ b/EmuFramework/src/gui/TouchConfigView.cc
+@@ -752,6 +752,7 @@ void TouchConfigView::refreshTouchConfigMenu()
+ 	if(EmuSystem::maxPlayers > 1)
+ 		player.setSelected((int)vController.inputPlayer(), *this);
+ 	size.setSelected(MenuId{vController.buttonSize()}, *this);
++	gameScreenSize.setSelected(MenuId{app().contentScale}, *this);
+ 	if(app().vibrationManager.hasVibrator())
+ 	{
+ 		vibrate.setBoolValue(vController.vibrateOnTouchInput(), *this);
+@@ -842,6 +843,45 @@ TouchConfigView::TouchConfigView(ViewAttachParams attach, VController &vCtrl):
+ 			.defaultItemOnSelect = [this](TextMenuItem &item){ vController.setButtonSize(item.id); }
+ 		},
+ 	},
++	gameScreenSizeItem
++	{
++		{"50%",  attach, {.id = 50}},
++		{"75%",  attach, {.id = 75}},
++		{"90%",  attach, {.id = 90}},
++		{"100%", attach, {.id = 100}},
++		{"110%", attach, {.id = 110}},
++		{"125%", attach, {.id = 125}},
++		{"150%", attach, {.id = 150}},
++		{"200%", attach, {.id = 200}},
++		{"Custom Value", attach,
++			[this](const Input::Event &e)
++			{
++				pushAndShowNewCollectValueRangeInputView<int, 10, 200>(attachParams(), e, "Input 10 to 200", "%",
++					[this](CollectTextInputView &, auto val)
++					{
++						app().setContentScale(val);
++						gameScreenSize.setSelected(MenuId{val}, *this);
++						dismissPrevious();
++						return true;
++					});
++				return false;
++			}, {.id = defaultMenuId}
++		},
++	},
++	gameScreenSize
++	{
++		"Game Screen Size", attach,
++		MenuId{app().contentScale},
++		gameScreenSizeItem,
++		{
++			.onSetDisplayString = [this](auto, Gfx::Text &t)
++			{
++				t.resetString(std::format("{}%", app().contentScale.value()));
++				return true;
++			},
++			.defaultItemOnSelect = [this](TextMenuItem &item){ app().setContentScale(item.id); }
++		},
++	},
+ 	vibrate
+ 	{
+ 		"Vibration", attach,
+@@ -1016,6 +1056,7 @@ void TouchConfigView::reloadItems()
+ 	}
+ 	item.emplace_back(&size);
+ 	item.emplace_back(&btnPlace);
++	item.emplace_back(&gameScreenSize);
+ 	placeVideo.setActive(system().hasContent());
+ 	item.emplace_back(&placeVideo);
+ 	item.emplace_back(&devButtonsHeading);
+diff --git a/EmuFramework/src/vcontrols/VController.cc b/EmuFramework/src/vcontrols/VController.cc
+index 2aa1c42c5..e5aec1806 100644
+--- a/EmuFramework/src/vcontrols/VController.cc
++++ b/EmuFramework/src/vcontrols/VController.cc
+@@ -133,8 +133,9 @@ void VController::setButtonSizes(int gamepadBtnSizeInPixels, int uiBtnSizeInPixe
+ {
+ 	if(EmuSystem::inputHasKeyboard)
+ 		kb.place(gamepadBtnSizeInPixels, gamepadBtnSizeInPixels * .75f, layoutBounds());
+-	for(auto &elem : gpElements) { setSize(elem, gamepadBtnSizeInPixels, renderer()); }
+-	for(auto &elem : uiElements) { setSize(elem, uiBtnSizeInPixels, renderer()); }
++	const size_t layoutIdx = window().isPortrait();
++	for(auto &elem : gpElements) { setSize(elem, std::max(20, gamepadBtnSizeInPixels * int(elem.sizePercent[layoutIdx]) / 100), renderer()); }
++	for(auto &elem : uiElements) { setSize(elem, std::max(20, uiBtnSizeInPixels * int(elem.sizePercent[layoutIdx]) / 100), renderer()); }
+ }
+ 
+ void VController::applyButtonSize()
+@@ -641,6 +642,7 @@ static bool readVControllerElement(InputManager &mgr, MapIO &io, std::vector<VCo
+ 	elem.layoutPos[0].origin = _2DOrigin::unpack(io.get<_2DOrigin::PackedType>());
+ 	io.read(elem.layoutPos[1].pos);
+ 	elem.layoutPos[1].origin = _2DOrigin::unpack(io.get<_2DOrigin::PackedType>());
++	io.read(elem.sizePercent);
+ 	if(auto state = io.get<VControllerState>(); state <= VControllerState::HIDDEN) { elem.state = state; }
+ 	return true;
+ }
+@@ -737,6 +739,7 @@ static void writeToConfig(const VControllerElement &e, FileIO &io)
+ 	io.put(e.layoutPos[0].origin.pack());
+ 	io.put(e.layoutPos[1].pos);
+ 	io.put(e.layoutPos[1].origin.pack());
++	io.write(e.sizePercent.data(), sizeof(e.sizePercent));
+ 	io.put(e.state);
+ }
+ 
+diff --git a/EmuFramework/src/vcontrols/VControllerButton.cc b/EmuFramework/src/vcontrols/VControllerButton.cc
+index 92aef50ba..7956ba11e 100644
+--- a/EmuFramework/src/vcontrols/VControllerButton.cc
++++ b/EmuFramework/src/vcontrols/VControllerButton.cc
+@@ -47,7 +47,7 @@ std::string VControllerButton::name(const InputManager &mgr) const
+ 
+ void VControllerButton::setAlpha(float alpha)
+ {
+-	float brightness = isHighlighted ? 2.f : 1.f;
++	float brightness = isHighlighted ? .82f : 1.f;
+ 	if(color != Gfx::Color{})
+ 	{
+ 		spriteColor = color.multiplyRGB(alpha).multiplyRGB(brightness);
+diff --git a/EmuFramework/src/vcontrols/VControllerDPad.cc b/EmuFramework/src/vcontrols/VControllerDPad.cc
+index ff194490c..7704bda6a 100644
+--- a/EmuFramework/src/vcontrols/VControllerDPad.cc
++++ b/EmuFramework/src/vcontrols/VControllerDPad.cc
+@@ -198,22 +198,11 @@ void VControllerDPad::updateSprite()
+ 	decltype(spriteQuads)::Type mapSpr{{.bounds = padArea.as<int16_t>(), .textureSpan = mapImg}};
+ 	std::array<Gfx::Color, 5> colors;
+ 	colors.fill({alpha});
+-	bool exclusiveLeftIsHighlighted =  isHighlighted[3] && !isHighlighted[0] && !isHighlighted[2];
+-	bool exclusiveUpIsHighlighted =    isHighlighted[0] && !isHighlighted[1] && !isHighlighted[3];
+-	bool exclusiveRightIsHighlighted = isHighlighted[1] && !isHighlighted[0] && !isHighlighted[2];
+-	bool exclusiveDownIsHighlighted =  isHighlighted[2] && !isHighlighted[1] && !isHighlighted[3];
+-	if((isHighlighted[0] && isHighlighted[3]) // up-left
+-		|| exclusiveLeftIsHighlighted || exclusiveUpIsHighlighted)
+-		colors[0] = colors[0].multiplyRGB(2.f);
+-	if((isHighlighted[2] && isHighlighted[1]) // down-right
+-		|| exclusiveRightIsHighlighted || exclusiveDownIsHighlighted)
+-		colors[3] = colors[3].multiplyRGB(2.f);
+-	if((isHighlighted[2] && isHighlighted[3]) // bottom left
+-		|| exclusiveLeftIsHighlighted || exclusiveDownIsHighlighted)
+-		colors[1] = colors[1].multiplyRGB(2.f);
+-	if((isHighlighted[0] && isHighlighted[1]) // top right
+-		|| exclusiveRightIsHighlighted || exclusiveUpIsHighlighted)
+-		colors[2] = colors[2].multiplyRGB(2.f);
++	// Pressed edge darkens while the opposite edge lifts, like a pivoting real D-pad.
++	if(isHighlighted[3]) { colors[0] = colors[0].multiplyRGB(.70f); colors[1] = colors[1].multiplyRGB(.70f); colors[2] = colors[2].multiplyRGB(1.28f); colors[3] = colors[3].multiplyRGB(1.28f); }
++	if(isHighlighted[1]) { colors[2] = colors[2].multiplyRGB(.70f); colors[3] = colors[3].multiplyRGB(.70f); colors[0] = colors[0].multiplyRGB(1.28f); colors[1] = colors[1].multiplyRGB(1.28f); }
++	if(isHighlighted[0]) { colors[0] = colors[0].multiplyRGB(.70f); colors[2] = colors[2].multiplyRGB(.70f); colors[1] = colors[1].multiplyRGB(1.28f); colors[3] = colors[3].multiplyRGB(1.28f); }
++	if(isHighlighted[2]) { colors[1] = colors[1].multiplyRGB(.70f); colors[3] = colors[3].multiplyRGB(.70f); colors[0] = colors[0].multiplyRGB(1.28f); colors[2] = colors[2].multiplyRGB(1.28f); }
+ 	for(auto &&[i, vtx] : enumerate(spr)) { vtx.color = colors[i]; }
+ 	for(auto &&[i, vtx] : enumerate(mapSpr)) { vtx.color = colors[i]; }
+ 	auto map = spriteQuads.map();
+diff --git a/Snes9x/metadata/conf.mk b/Snes9x/metadata/conf.mk
+index 8768c2f32..61d97c84c 100644
+--- a/Snes9x/metadata/conf.mk
++++ b/Snes9x/metadata/conf.mk
+@@ -1,10 +1,10 @@
+ include $(EMUFRAMEWORK_PATH)/metadata/conf.mk
+-metadata_name = Snes9x EX+
+-metadata_exec = s9xp
+-metadata_pkgName = Snes9xEXPlus
++metadata_name = SNES Pad V5
++metadata_exec = snespadv5
++metadata_pkgName = SNESPadV5
+ metadata_supportedFileExtensions += smc sfc swc bs st fig mgd
+-metadata_id = com.explusalpha.Snes9xPlus
+-metadata_vendor = Robert Broglia
++metadata_id = com.rlbtplomberie.snespadv5
++metadata_vendor = SNES Pad Project
+ pnd_metadata_license = Proprietary
+ pnd_metadata_licenseURL = http://www.explusalpha.com/home/general-info/licenses/snes9x
+-pnd_metadata_description = SNES/Super Famicom emulator using components from Snes9x 1.55
+\ No newline at end of file
++pnd_metadata_description = SNES/Super Famicom emulator using components from Snes9x 1.55
+diff --git a/Snes9x/src/main/input.cc b/Snes9x/src/main/input.cc
+index 89f0ed3a7..01faad4dd 100644
+--- a/Snes9x/src/main/input.cc
++++ b/Snes9x/src/main/input.cc
+@@ -54,6 +54,11 @@ constexpr auto faceKeyInfo = makeArray<KeyInfo>
+ 	SnesKey::X
+ );
+ 
++constexpr auto bKeyInfo = makeArray<KeyInfo>(SnesKey::B);
++constexpr auto aKeyInfo = makeArray<KeyInfo>(SnesKey::A);
++constexpr auto yKeyInfo = makeArray<KeyInfo>(SnesKey::Y);
++constexpr auto xKeyInfo = makeArray<KeyInfo>(SnesKey::X);
++
+ constexpr auto turboFaceKeyInfo = turbo(faceKeyInfo);
+ 
+ constexpr auto faceLRKeyInfo = makeArray<KeyInfo>
+@@ -592,7 +597,10 @@ SystemInputDeviceDesc Snes9xSystem::inputDeviceDesc(int idx) const
+ 	static constexpr std::array gamepadComponents
+ 	{
+ 		InputComponentDesc{"D-Pad", dpadKeyInfo, InputComponent::dPad, LB2DO},
+-		InputComponentDesc{"Face Buttons", faceKeyInfo, InputComponent::button, RB2DO, {.staggeredLayout = true}},
++		InputComponentDesc{"B Button", bKeyInfo, InputComponent::button, RB2DO},
++		InputComponentDesc{"A Button", aKeyInfo, InputComponent::button, RB2DO},
++		InputComponentDesc{"Y Button", yKeyInfo, InputComponent::button, RB2DO},
++		InputComponentDesc{"X Button", xKeyInfo, InputComponent::button, RB2DO},
+ 		InputComponentDesc{"Face Buttons + Inline L/R", faceLRKeyInfo, InputComponent::button, RB2DO, {.altConfig = true, .staggeredLayout = true}},
+ 		InputComponentDesc{"L", lKeyInfo, InputComponent::trigger, LB2DO},
+ 		InputComponentDesc{"R", rKeyInfo, InputComponent::trigger, RB2DO},
