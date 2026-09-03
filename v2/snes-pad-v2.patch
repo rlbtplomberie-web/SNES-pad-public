@@ -1,0 +1,267 @@
+diff --git a/EmuFramework/include/emuframework/EmuApp.hh b/EmuFramework/include/emuframework/EmuApp.hh
+index 85af35d..6936098 100644
+--- a/EmuFramework/include/emuframework/EmuApp.hh
++++ b/EmuFramework/include/emuframework/EmuApp.hh
+@@ -66,7 +66,9 @@ class EmuViewController;
+ WISE_ENUM_CLASS((AssetFileID, size_t),
+ 	ui,
+ 	gamepadOverlay,
+-	keyboardOverlay);
++	keyboardOverlay,
++	portraitSkin,
++	landscapeSkin);
+ 
+ WISE_ENUM_CLASS((AssetID, size_t),
+ 	arrow,
+@@ -86,13 +88,17 @@ WISE_ENUM_CLASS((AssetID, size_t),
+ 	openFile,
+ 	rewind,
+ 	gamepadOverlay,
+-	keyboardOverlay);
++	keyboardOverlay,
++	portraitSkin,
++	landscapeSkin);
+ 
+ constexpr const char *assetFilename[wise_enum::size<AssetFileID>]
+ {
+ 	"ui.png",
+ 	"gpOverlay.png",
+ 	"kbOverlay.png",
++	"snesPadPortrait.png",
++	"snesPadLandscape.png",
+ };
+ 
+ struct AssetDesc
+diff --git a/EmuFramework/include/emuframework/EmuInputView.hh b/EmuFramework/include/emuframework/EmuInputView.hh
+index fd3348b..b5a4266 100644
+--- a/EmuFramework/include/emuframework/EmuInputView.hh
++++ b/EmuFramework/include/emuframework/EmuInputView.hh
+@@ -46,6 +46,9 @@ public:
+ private:
+ 	VController *vController{};
+ 	EmuVideoLayer *videoLayer{};
++	Gfx::ITexQuads skinQuad;
++	Gfx::TextureSpan portraitSkin;
++	Gfx::TextureSpan landscapeSkin;
+ 	bool speedToggleActive{};
+ 
+ 	void updateRunSpeed(AltSpeedMode);
+diff --git a/EmuFramework/include/emuframework/TouchConfigView.hh b/EmuFramework/include/emuframework/TouchConfigView.hh
+index 0ae04dc..1a22421 100644
+--- a/EmuFramework/include/emuframework/TouchConfigView.hh
++++ b/EmuFramework/include/emuframework/TouchConfigView.hh
+@@ -47,6 +47,8 @@ protected:
+ 	MultiChoiceMenuItem player;
+ 	TextMenuItem sizeItem[11];
+ 	MultiChoiceMenuItem size;
++	TextMenuItem gameScreenSizeItem[9];
++	MultiChoiceMenuItem gameScreenSize;
+ 	BoolMenuItem vibrate;
+ 	BoolMenuItem showOnTouch;
+ 	BoolMenuItem highlightPushedButtons;
+diff --git a/EmuFramework/include/emuframework/VController.hh b/EmuFramework/include/emuframework/VController.hh
+index 2ab4fe7..c55dec6 100755
+--- a/EmuFramework/include/emuframework/VController.hh
++++ b/EmuFramework/include/emuframework/VController.hh
+@@ -211,7 +211,15 @@ public:
+ 
+ 	void updateSprite(auto &quads)
+ 	{
+-		Gfx::ILitTexQuad({.bounds = bounds_.as<int16_t>(), .color = spriteColor, .textureSpan = texture}).write(quads, spriteIdx);
++		auto drawBounds = bounds_;
++		if(isHighlighted)
++		{
++			const int inset = std::max(1, drawBounds.xSize() / 18);
++			drawBounds.x += inset;
++			drawBounds.x2 -= inset;
++			drawBounds.y += inset * 2;
++		}
++		Gfx::ILitTexQuad({.bounds = drawBounds.as<int16_t>(), .color = spriteColor, .textureSpan = texture}).write(quads, spriteIdx);
+ 	}
+ 
+ 	void updateSprite(auto &quads, auto &boundQuads)
+@@ -667,8 +675,8 @@ private:
+ 	VControllerGamepadFlags gamepadDisabledFlags{};
+ 	bool kbMode{};
+ 	uint8_t alpha{};
+-	ConditionalMember<Config::DISPLAY_CUTOUT, bool> allowButtonsPastContentBounds_{};
+-	ConditionalMember<Config::BASE_SUPPORTS_VIBRATOR, bool> vibrateOnTouchInput_{};
++	ConditionalMember<Config::DISPLAY_CUTOUT, bool> allowButtonsPastContentBounds_{true};
++	ConditionalMember<Config::BASE_SUPPORTS_VIBRATOR, bool> vibrateOnTouchInput_{true};
+ public:
+ 	bool highlightPushedButtons{true};
+ 
+diff --git a/EmuFramework/src/EmuApp.cc b/EmuFramework/src/EmuApp.cc
+index 1774a3a..c9f13b6 100644
+--- a/EmuFramework/src/EmuApp.cc
++++ b/EmuFramework/src/EmuApp.cc
+@@ -87,6 +87,8 @@ constexpr AssetDesc assetDesc[wise_enum::size<AssetID>]
+ 	{AssetFileID::ui, {{.75, .75}, {1.,  1.}}},
+ 	{AssetFileID::gamepadOverlay, {{}, {1.f, 1.f}}},
+ 	{AssetFileID::keyboardOverlay, {{}, {1.f, 1.f}}},
++	{AssetFileID::portraitSkin, {{}, {1.f, 1.f}}},
++	{AssetFileID::landscapeSkin, {{}, {1.f, 1.f}}},
+ };
+ 
+ EmuApp::EmuApp(ApplicationInitParams initParams, ApplicationContext &ctx):
+diff --git a/EmuFramework/src/gui/EmuInputView.cc b/EmuFramework/src/gui/EmuInputView.cc
+index 528a567..1aad182 100644
+--- a/EmuFramework/src/gui/EmuInputView.cc
++++ b/EmuFramework/src/gui/EmuInputView.cc
+@@ -34,15 +34,22 @@ EmuInputView::EmuInputView() {}
+ EmuInputView::EmuInputView(ViewAttachParams attach, VController &vCtrl, EmuVideoLayer &videoLayer):
+ 	View(attach),
+ 	vController{&vCtrl},
+-	videoLayer{&videoLayer} {}
++	videoLayer{&videoLayer},
++	skinQuad{attach.rendererTask, {.size = 1}},
++	portraitSkin{app().asset(AssetID::portraitSkin)},
++	landscapeSkin{app().asset(AssetID::landscapeSkin)} {}
+ 
+ void EmuInputView::draw(Gfx::RendererCommands &__restrict__ cmds)
+ {
++	auto skin = window().isPortrait() ? portraitSkin : landscapeSkin;
++	cmds.set(Gfx::BlendMode::PREMULT_ALPHA);
++	cmds.basicEffect().drawSprite(cmds, skinQuad, 0, skin);
+ 	vController->draw(cmds);
+ }
+ 
+ void EmuInputView::place()
+ {
++	skinQuad.write(0, {.bounds = displayRect().as<int16_t>()});
+ 	vController->place();
+ }
+ 
+diff --git a/EmuFramework/src/gui/TouchConfigView.cc b/EmuFramework/src/gui/TouchConfigView.cc
+index e5a9b07..d0c2330 100644
+--- a/EmuFramework/src/gui/TouchConfigView.cc
++++ b/EmuFramework/src/gui/TouchConfigView.cc
+@@ -752,6 +752,7 @@ void TouchConfigView::refreshTouchConfigMenu()
+ 	if(EmuSystem::maxPlayers > 1)
+ 		player.setSelected((int)vController.inputPlayer(), *this);
+ 	size.setSelected(MenuId{vController.buttonSize()}, *this);
++	gameScreenSize.setSelected(MenuId{app().contentScale}, *this);
+ 	if(app().vibrationManager.hasVibrator())
+ 	{
+ 		vibrate.setBoolValue(vController.vibrateOnTouchInput(), *this);
+@@ -842,6 +843,45 @@ TouchConfigView::TouchConfigView(ViewAttachParams attach, VController &vCtrl):
+ 			.defaultItemOnSelect = [this](TextMenuItem &item){ vController.setButtonSize(item.id); }
+ 		},
+ 	},
++	gameScreenSizeItem
++	{
++		{"50%",  attach, {.id = 50}},
++		{"75%",  attach, {.id = 75}},
++		{"90%",  attach, {.id = 90}},
++		{"100%", attach, {.id = 100}},
++		{"110%", attach, {.id = 110}},
++		{"125%", attach, {.id = 125}},
++		{"150%", attach, {.id = 150}},
++		{"200%", attach, {.id = 200}},
++		{"Custom Value", attach,
++			[this](const Input::Event &e)
++			{
++				pushAndShowNewCollectValueRangeInputView<int, 10, 200>(attachParams(), e, "Input 10 to 200", "%",
++					[this](CollectTextInputView &, auto val)
++					{
++						app().setContentScale(val);
++						gameScreenSize.setSelected(MenuId{val}, *this);
++						dismissPrevious();
++						return true;
++					});
++				return false;
++			}, {.id = defaultMenuId}
++		},
++	},
++	gameScreenSize
++	{
++		"Game Screen Size", attach,
++		MenuId{app().contentScale},
++		gameScreenSizeItem,
++		{
++			.onSetDisplayString = [this](auto, Gfx::Text &t)
++			{
++				t.resetString(std::format("{}%", app().contentScale.value()));
++				return true;
++			},
++			.defaultItemOnSelect = [this](TextMenuItem &item){ app().setContentScale(item.id); }
++		},
++	},
+ 	vibrate
+ 	{
+ 		"Vibration", attach,
+@@ -1016,6 +1056,7 @@ void TouchConfigView::reloadItems()
+ 	}
+ 	item.emplace_back(&size);
+ 	item.emplace_back(&btnPlace);
++	item.emplace_back(&gameScreenSize);
+ 	placeVideo.setActive(system().hasContent());
+ 	item.emplace_back(&placeVideo);
+ 	item.emplace_back(&devButtonsHeading);
+diff --git a/EmuFramework/src/vcontrols/VControllerButton.cc b/EmuFramework/src/vcontrols/VControllerButton.cc
+index 92aef50..7956ba1 100644
+--- a/EmuFramework/src/vcontrols/VControllerButton.cc
++++ b/EmuFramework/src/vcontrols/VControllerButton.cc
+@@ -47,7 +47,7 @@ std::string VControllerButton::name(const InputManager &mgr) const
+ 
+ void VControllerButton::setAlpha(float alpha)
+ {
+-	float brightness = isHighlighted ? 2.f : 1.f;
++	float brightness = isHighlighted ? .82f : 1.f;
+ 	if(color != Gfx::Color{})
+ 	{
+ 		spriteColor = color.multiplyRGB(alpha).multiplyRGB(brightness);
+diff --git a/EmuFramework/src/vcontrols/VControllerDPad.cc b/EmuFramework/src/vcontrols/VControllerDPad.cc
+index ff19449..7704bda 100644
+--- a/EmuFramework/src/vcontrols/VControllerDPad.cc
++++ b/EmuFramework/src/vcontrols/VControllerDPad.cc
+@@ -198,22 +198,11 @@ void VControllerDPad::updateSprite()
+ 	decltype(spriteQuads)::Type mapSpr{{.bounds = padArea.as<int16_t>(), .textureSpan = mapImg}};
+ 	std::array<Gfx::Color, 5> colors;
+ 	colors.fill({alpha});
+-	bool exclusiveLeftIsHighlighted =  isHighlighted[3] && !isHighlighted[0] && !isHighlighted[2];
+-	bool exclusiveUpIsHighlighted =    isHighlighted[0] && !isHighlighted[1] && !isHighlighted[3];
+-	bool exclusiveRightIsHighlighted = isHighlighted[1] && !isHighlighted[0] && !isHighlighted[2];
+-	bool exclusiveDownIsHighlighted =  isHighlighted[2] && !isHighlighted[1] && !isHighlighted[3];
+-	if((isHighlighted[0] && isHighlighted[3]) // up-left
+-		|| exclusiveLeftIsHighlighted || exclusiveUpIsHighlighted)
+-		colors[0] = colors[0].multiplyRGB(2.f);
+-	if((isHighlighted[2] && isHighlighted[1]) // down-right
+-		|| exclusiveRightIsHighlighted || exclusiveDownIsHighlighted)
+-		colors[3] = colors[3].multiplyRGB(2.f);
+-	if((isHighlighted[2] && isHighlighted[3]) // bottom left
+-		|| exclusiveLeftIsHighlighted || exclusiveDownIsHighlighted)
+-		colors[1] = colors[1].multiplyRGB(2.f);
+-	if((isHighlighted[0] && isHighlighted[1]) // top right
+-		|| exclusiveRightIsHighlighted || exclusiveUpIsHighlighted)
+-		colors[2] = colors[2].multiplyRGB(2.f);
++	// Pressed edge darkens while the opposite edge lifts, like a pivoting real D-pad.
++	if(isHighlighted[3]) { colors[0] = colors[0].multiplyRGB(.70f); colors[1] = colors[1].multiplyRGB(.70f); colors[2] = colors[2].multiplyRGB(1.28f); colors[3] = colors[3].multiplyRGB(1.28f); }
++	if(isHighlighted[1]) { colors[2] = colors[2].multiplyRGB(.70f); colors[3] = colors[3].multiplyRGB(.70f); colors[0] = colors[0].multiplyRGB(1.28f); colors[1] = colors[1].multiplyRGB(1.28f); }
++	if(isHighlighted[0]) { colors[0] = colors[0].multiplyRGB(.70f); colors[2] = colors[2].multiplyRGB(.70f); colors[1] = colors[1].multiplyRGB(1.28f); colors[3] = colors[3].multiplyRGB(1.28f); }
++	if(isHighlighted[2]) { colors[1] = colors[1].multiplyRGB(.70f); colors[3] = colors[3].multiplyRGB(.70f); colors[0] = colors[0].multiplyRGB(1.28f); colors[2] = colors[2].multiplyRGB(1.28f); }
+ 	for(auto &&[i, vtx] : enumerate(spr)) { vtx.color = colors[i]; }
+ 	for(auto &&[i, vtx] : enumerate(mapSpr)) { vtx.color = colors[i]; }
+ 	auto map = spriteQuads.map();
+diff --git a/Snes9x/metadata/conf.mk b/Snes9x/metadata/conf.mk
+index 8768c2f..a4d3d3b 100644
+--- a/Snes9x/metadata/conf.mk
++++ b/Snes9x/metadata/conf.mk
+@@ -1,10 +1,10 @@
+ include $(EMUFRAMEWORK_PATH)/metadata/conf.mk
+-metadata_name = Snes9x EX+
+-metadata_exec = s9xp
+-metadata_pkgName = Snes9xEXPlus
++metadata_name = SNES Pad V2
++metadata_exec = snespadv2
++metadata_pkgName = SNESPadV2
+ metadata_supportedFileExtensions += smc sfc swc bs st fig mgd
+-metadata_id = com.explusalpha.Snes9xPlus
+-metadata_vendor = Robert Broglia
++metadata_id = com.rlbtplomberie.snespadv2
++metadata_vendor = SNES Pad Project
+ pnd_metadata_license = Proprietary
+ pnd_metadata_licenseURL = http://www.explusalpha.com/home/general-info/licenses/snes9x
+-pnd_metadata_description = SNES/Super Famicom emulator using components from Snes9x 1.55
+\ No newline at end of file
++pnd_metadata_description = SNES/Super Famicom emulator using components from Snes9x 1.55
