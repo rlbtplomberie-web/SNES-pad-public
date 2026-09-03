@@ -236,7 +236,7 @@ index 528a567d9..cd6ef1296 100644
  }
  
 diff --git a/EmuFramework/src/gui/PlaceVControlsView.cc b/EmuFramework/src/gui/PlaceVControlsView.cc
-index c4cb02daa..c84f2af57 100644
+index c4cb02daa..6b96c6ab0 100644
 --- a/EmuFramework/src/gui/PlaceVControlsView.cc
 +++ b/EmuFramework/src/gui/PlaceVControlsView.cc
 @@ -114,6 +114,10 @@ bool PlaceVControlsView::inputEvent(const Input::Event &e)
@@ -258,7 +258,7 @@ index c4cb02daa..c84f2af57 100644
 +						{
 +							auto diff = state.downPosDiff();
 +							d.elem->sizePercent[layoutIdx] = std::clamp(d.startSizePercent + (diff.x + diff.y) / 3, 45, 220);
-+							vController.applyButtonSize();
++							vController.place();
 +							app().viewController().placeEmuViews();
 +							postDraw();
 +							return;
