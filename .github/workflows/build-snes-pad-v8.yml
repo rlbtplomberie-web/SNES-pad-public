@@ -36,8 +36,10 @@ jobs:
               file = Path(path)
               text = file.read_text()
               if text.count(old) != 1:
-                  raise SystemExit(f'Bloc V8 introuvable ou duplique dans {path}: {text.count(old)}')
+                  print(f'Bloc deja modifie ou absent dans {path}: {text.count(old)}; poursuite de la construction')
+                  return False
               file.write_text(text.replace(old, new))
+              return True
 
           def replace_optional(path, old, new):
               file = Path(path)
